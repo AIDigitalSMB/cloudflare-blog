@@ -1,0 +1,133 @@
+# Working in this repository
+
+A solo-author static blog: Astro 7 + TypeScript, deployed to **Cloudflare** by its
+dashboard's own Git integration, served from the domain root. This is the
+Cloudflare Pages sibling in the AIDigitalSMB family of blogs (one per static host, each
+in its own repository) — not a mirror, no shared git history. **Status: not deployed
+yet** — the Cloudflare Pages project has not been created, and
+`https://aidigitalsmb.pages.dev` is a placeholder URL until it is. Full detail in
+[`docs/architecture.md`](docs/architecture.md).
+
+## Development
+
+Start the dev server in background mode:
+
+```
+astro dev --background
+```
+
+Manage it with `astro dev stop`, `astro dev status`, `astro dev logs`.
+
+```bash
+npm run dev      # localhost:4321/ — drafts visible
+npm run build    # production build + Pagefind index
+npm run preview  # serves dist/ — the only faithful test of search and base paths
+npm run check    # TypeScript + Astro diagnostics; keep this at 0 errors
+```
+
+**On this Windows machine**, Smart App Control blocks Astro's native compiler binary.
+After every `npm install` or `npm ci`:
+
+```bash
+npm install --no-save --force @astrojs/compiler-binding-wasm32-wasi
+```
+
+## Rules that are easy to get wrong
+
+**Never write a root-absolute internal path.** It happens to work today — this is a
+root-served site with `base: '/'` — but that is hosting, not design. Use the helpers in
+`src/lib/url.ts` so the site can move again without a rewrite:
+
+| Helper | For |
+| --- | --- |
+| `withBase(p)` | paths you author — `/about/` → `/about/` here, `/blog/about/` under a base |
+| `absFromBuiltPath(p, site)` | paths Astro produced (`Astro.url.pathname`, `ImageMetadata.src`, `paginate()` URLs) — **already based** |
+| `absUrl(p, site)` | absolute URL from a path you author |
+
+Do not try to collapse these into one function that detects whether a path "already has
+the base". That was tried on a sibling project and shipped two bugs: `/blog/my-post/`
+is genuinely ambiguous because a `/blog/` route sits under a `/blog/` base.
+
+**`paginate()` URLs already include the base.** Passing them through `withBase()`
+doubles it the moment a base is configured. `Pagination.astro` takes them raw.
+
+**Query posts through `getPosts()`** in `src/lib/posts.ts`, never `getCollection`
+directly. That single call is where drafts are filtered out of production builds and
+where date ordering happens.
+
+**Frontmatter image paths are relative to the Markdown file** —
+`../../assets/images/uploads/…` — because `image()` resolves them that way and the CMS
+is configured to write exactly that. Both `media_folder` and `public_folder` in
+`public/admin/config.yml` must stay in sync with wherever posts live.
+
+**Site-wide settings live in `src/consts.ts` and nowhere else.** If you find yourself
+hardcoding a title, an author name or a page size, put it there instead.
+
+**The CMS schema and the Zod schema must match.** `public/admin/config.yml` field names
+and `src/content.config.ts` are one contract; changing either alone breaks editing or
+breaks the build.
+
+**`public/admin/config.yml` is YAML.** Quote any string containing `: ` — an unquoted
+colon-space silently breaks the whole CMS.
+
+**The content repo (GitHub) and the host (Cloudflare) are two separate systems, bridged
+by Cloudflare's own Git integration.** Sveltia CMS commits to the GitHub repo named in
+`public/admin/config.yml`. Cloudflare's dashboard is connected directly to that repo via
+its own GitHub App installation — it watches for pushes to `main` and builds and deploys
+itself, server-side. There is no GitHub Actions workflow and no Wrangler step in this
+project's pipeline. If a post is missing from the live site, check the Deployments tab
+in the Cloudflare dashboard (build log and status) before suspecting anything else.
+
+## Before calling a change done
+
+```bash
+npm run check    # expect 0 errors
+npm run build
+grep -rhoE 'https?://[^"< ]+' dist --include=*.html | grep -v 'aidigitalsmb.pages.dev' | sort -u
+```
+
+The grep must print only genuinely external URLs (giscus, google maps, unpkg). If the
+change is visible in a browser, verify with `npm run preview` rather than `npm run dev`
+— search, `/admin/` and draft exclusion all behave differently between the two.
+
+## Deployment
+
+Push to `main` → Cloudflare's dashboard Git integration (Workers & Pages → this project,
+connected directly to `AIDigitalSMB/cloudflare-blog`) picks it up via its own
+GitHub App installation and builds and deploys it itself — `npm run build` (which
+triggers the `postbuild` Pagefind index), then publishing the output directory. Saving in
+the CMS is a push, so publishing and deploying are the same action. There is no GitHub
+Actions workflow and no Wrangler CLI involved anywhere in this pipeline. See
+[`docs/deployment.md`](docs/deployment.md).
+
+No repository secrets exist or are needed — build authorization is entirely between
+Cloudflare and its own GitHub App installation, not a token stored in this repo.
+
+**Build settings — build command, output directory, Node version, environment
+variables — live in the Cloudflare dashboard project settings, not in any file in this
+repository.** There is no `wrangler.toml` and none is needed. This is the one real
+"where do I configure X" gotcha coming from the sibling GitHub Pages blog, whose
+equivalent settings live in a workflow file you can read in this repo — here, look in
+the dashboard instead. See [`docs/setup.md`](docs/setup.md).
+
+The repository is `AIDigitalSMB/cloudflare-blog` on GitHub (public), pushed by the
+`AIDigitalSMB` account. Cloudflare is **not yet connected** to it, so nothing deploys
+from a push yet. When creating the project in the Cloudflare dashboard, note that the
+unified "connect Git" flow can default to creating a **Worker** rather than a classic
+**Pages** project — choose **Pages**, set build command `npm run build`, output
+directory `dist`, and the `NODE_VERSION` environment variable to `22`.
+
+`SIBLING_SITES` in `src/consts.ts` is deliberately empty (the footer then renders no
+sibling row); fill it in once all the sibling blogs are deployed.
+
+## Documentation
+
+Full docs: https://docs.astro.build
+
+- [Routing and dynamic routes](https://docs.astro.build/en/guides/routing/)
+- [Content collections](https://docs.astro.build/en/guides/content-collections/)
+- [Images](https://docs.astro.build/en/guides/images/)
+- [Astro components](https://docs.astro.build/en/basics/astro-components/)
+
+Cloudflare-specific: https://developers.cloudflare.com/pages/ and
+https://developers.cloudflare.com/pages/configuration/git-integration/
